@@ -218,3 +218,136 @@ def get_scheme(name: str) -> ColorScheme:
 
 def list_schemes() -> List[str]:
     return sorted(SCHEMES.keys())
+
+
+# ── Blob colour modes ─────────────────────────────────────────────────────
+
+# Modes for assigning individual colours to each blob:
+#   "uniform"    — all blobs use the scheme's base/hot
+#   "contrast"   — alternate between base and contrast colour
+#   "rainbow"    — each blob gets a different hue at equal spacing
+#   "warm_cool"  — half warm tones, half cool tones
+#   "random"     — random hue per blob (fixed saturation/value)
+#   "gradient"   — gradient from base hue to contrasting hue
+#   "custom"     — user assigns colours individually
+
+BLOB_COLOR_MODES = [
+    "uniform", "contrast", "rainbow", "warm_cool",
+    "random", "gradient",
+]
+
+
+def _hsv_to_rgb(h: float, s: float, v: float) -> RGB:
+    r, g, b = colorsys.hsv_to_rgb(h % 1.0, s, v)
+    return _clamp_rgb(r, g, b)
+
+
+def assign_blob_colors(
+    blob_count: int,
+    scheme: ColorScheme,
+    mode: str = "uniform",
+    seed: int = 42,
+) -> List[Tuple[RGB, RGB]]:
+    """Generate (base_color, hot_color) pairs for each blob.
+
+    Args:
+        blob_count: Total number of blobs (including pool blob).
+        scheme:     Current colour scheme.
+        mode:       One of BLOB_COLOR_MODES.
+        seed:       RNG seed for 'random' mode reproducibility.
+
+    Returns:
+        List of (base_rgb, hot_rgb) tuples, one per blob.
+    """
+    import random as _random
+    rng = _random.Random(seed)
+
+    if mode == "uniform" or mode not in BLOB_COLOR_MODES:
+        # All blobs same colour
+        return [(scheme.base, scheme.hot)] * blob_count
+
+    elif mode == "contrast":
+        # Alternate between base and contrast colour
+        contrast = scheme.contrast or complementary(scheme.base)
+        contrast_hot = make_hot_from_base(contrast)
+        colors = []
+        for i in range(blob_count):
+            if i % 2 == 0:
+                colors.append((scheme.base, scheme.hot))
+            else:
+                colors.append((contrast, contrast_hot))
+        return colors
+
+    elif mode == "rainbow":
+        # Evenly spaced hues around the colour wheel
+        base_h, base_s, base_v = colorsys.rgb_to_hsv(
+            scheme.base[0]/255, scheme.base[1]/255, scheme.base[2]/255
+        )
+        colors = []
+        for i in range(blob_count):
+            h = (base_h + i / max(blob_count, 1)) % 1.0
+            base_c = _hsv_to_rgb(h, max(0.6, base_s), max(0.5, base_v))
+            hot_c = make_hot_from_base(base_c)
+            colors.append((base_c, hot_c))
+        return colors
+
+    elif mode == "warm_cool":
+        # First half: warm hues (reds/oranges/yellows)
+        # Second half: cool hues (blues/greens/purples)
+        colors = []
+        for i in range(blob_count):
+            frac = i / max(blob_count - 1, 1)
+            if frac < 0.5:
+                # Warm: hue 0.0–0.12 (red→orange→yellow)
+                h = 0.0 + frac * 2 * 0.12
+                s, v = 0.85, 0.75
+            else:
+                # Cool: hue 0.5–0.72 (cyan→blue→purple)
+                h = 0.5 + (frac - 0.5) * 2 * 0.22
+                s, v = 0.75, 0.7
+            base_c = _hsv_to_rgb(h, s, v)
+            hot_c = make_hot_from_base(base_c)
+            colors.append((base_c, hot_c))
+        return colors
+
+    elif mode == "random":
+        # Random hues with consistent saturation/value
+        base_h, base_s, base_v = colorsys.rgb_to_hsv(
+            scheme.base[0]/255, scheme.base[1]/255, scheme.base[2]/255
+        )
+        colors = []
+        for i in range(blob_count):
+            h = rng.random()
+            s = 0.6 + rng.random() * 0.3
+            v = 0.5 + rng.random() * 0.35
+            base_c = _hsv_to_rgb(h, s, v)
+            hot_c = make_hot_from_base(base_c)
+            colors.append((base_c, hot_c))
+        return colors
+
+    elif mode == "gradient":
+        # Gradient from base hue to contrast hue
+        base_h, base_s, base_v = colorsys.rgb_to_hsv(
+            scheme.base[0]/255, scheme.base[1]/255, scheme.base[2]/255
+        )
+        contrast = scheme.contrast or complementary(scheme.base)
+        end_h, end_s, end_v = colorsys.rgb_to_hsv(
+            contrast[0]/255, contrast[1]/255, contrast[2]/255
+        )
+        # Find shortest path around hue wheel
+        dh = end_h - base_h
+        if abs(dh) > 0.5:
+            dh = dh - 1.0 if dh > 0 else dh + 1.0
+
+        colors = []
+        for i in range(blob_count):
+            t = i / max(blob_count - 1, 1)
+            h = (base_h + dh * t) % 1.0
+            s = base_s + (end_s - base_s) * t
+            v = base_v + (end_v - base_v) * t
+            base_c = _hsv_to_rgb(h, s, v)
+            hot_c = make_hot_from_base(base_c)
+            colors.append((base_c, hot_c))
+        return colors
+
+    return [(scheme.base, scheme.hot)] * blob_count

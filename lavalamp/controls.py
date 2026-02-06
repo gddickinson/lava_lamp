@@ -36,10 +36,12 @@ from PyQt5.QtWidgets import (
 )
 
 from .canvas import LavaCanvas
-from .engine import LavaLampEngine, PhysicsParams
+from .engine import LavaLampEngine, PhysicsParams, WAX_TYPES, WAX_TYPE_NAMES, WaxType
 from .palettes import (
     SCHEMES,
+    BLOB_COLOR_MODES,
     ColorScheme,
+    assign_blob_colors,
     create_custom_scheme,
     get_scheme,
     list_schemes,
@@ -242,6 +244,27 @@ class ControlPanel(QWidget):
         )
         pg.addWidget(self._warmup_slider)
 
+        # ── Displacement (medium-range interaction) ───────────────────────
+        pg.addWidget(QLabel("─ Displacement ─"))
+
+        self._displace_range_slider = LSlider("Displace Range", 10, 35, 18, "")
+        self._displace_range_slider.valueChanged.connect(
+            lambda v: setattr(self.engine.params, "displacement_range", v / 10)
+        )
+        pg.addWidget(self._displace_range_slider)
+
+        self._displace_str_slider = LSlider("Displace Force", 0, 20, 4, "")
+        self._displace_str_slider.valueChanged.connect(
+            lambda v: setattr(self.engine.params, "displacement_strength", v / 10)
+        )
+        pg.addWidget(self._displace_str_slider)
+
+        self._deflect_slider = LSlider("Approach Deflect", 0, 20, 6, "")
+        self._deflect_slider.valueChanged.connect(
+            lambda v: setattr(self.engine.params, "approach_deflection", v / 10)
+        )
+        pg.addWidget(self._deflect_slider)
+
         layout.addWidget(phys_group)
 
         # ══════════════════════════════════════════════════════════════════
@@ -270,7 +293,91 @@ class ControlPanel(QWidget):
         )
         bg.addWidget(self._thermal_sep_slider)
 
+        # ── Blob colouring mode ───────────────────────────────────────────
+        bg.addWidget(QLabel("Blob Colouring:"))
+        self._blob_color_combo = QComboBox()
+        mode_labels = {
+            "uniform": "Uniform (all same)",
+            "contrast": "Contrast (alternating)",
+            "rainbow": "Rainbow",
+            "warm_cool": "Warm & Cool",
+            "random": "Random",
+            "gradient": "Gradient",
+        }
+        for mode in BLOB_COLOR_MODES:
+            self._blob_color_combo.addItem(mode_labels.get(mode, mode), mode)
+        self._blob_color_combo.currentIndexChanged.connect(self._on_blob_color_mode)
+        bg.addWidget(self._blob_color_combo)
+
+        # Blob colour swatches
+        self._blob_swatch_layout = QHBoxLayout()
+        bg.addLayout(self._blob_swatch_layout)
+
         layout.addWidget(blob_group)
+
+        # ══════════════════════════════════════════════════════════════════
+        # INDIVIDUAL BLOB EDITOR
+        # ══════════════════════════════════════════════════════════════════
+        edit_group = QGroupBox("Edit Individual Blob")
+        eg = QVBoxLayout(edit_group)
+
+        # Blob selector
+        sel_row = QHBoxLayout()
+        sel_row.addWidget(QLabel("Select:"))
+        self._blob_select = QComboBox()
+        self._blob_select.currentIndexChanged.connect(self._on_blob_selected)
+        sel_row.addWidget(self._blob_select, stretch=1)
+        eg.addLayout(sel_row)
+
+        # Wax type preset
+        type_row = QHBoxLayout()
+        type_row.addWidget(QLabel("Wax Type:"))
+        self._wax_type_combo = QComboBox()
+        wax_labels = {
+            "standard": "Standard",
+            "heavy": "Heavy (dense, slow to heat)",
+            "light": "Light (buoyant, quick to heat)",
+            "sluggish": "Sluggish (high viscosity)",
+            "volatile": "Volatile (fast, expands a lot)",
+            "giant": "Giant Globule (big & slow)",
+        }
+        for key in WAX_TYPE_NAMES:
+            self._wax_type_combo.addItem(wax_labels.get(key, key), key)
+        self._wax_type_combo.currentIndexChanged.connect(self._on_wax_type_changed)
+        type_row.addWidget(self._wax_type_combo, stretch=1)
+        eg.addLayout(type_row)
+
+        # Custom property sliders
+        eg.addWidget(QLabel("Fine-tune:"))
+
+        self._density_slider = LSlider("Density", 3, 25, 10, "")
+        self._density_slider.valueChanged.connect(self._on_blob_prop_changed)
+        eg.addWidget(self._density_slider)
+
+        self._heat_sens_slider = LSlider("Heat Sens.", 2, 30, 10, "")
+        self._heat_sens_slider.valueChanged.connect(self._on_blob_prop_changed)
+        eg.addWidget(self._heat_sens_slider)
+
+        self._viscosity_slider = LSlider("Viscosity", 2, 30, 10, "")
+        self._viscosity_slider.valueChanged.connect(self._on_blob_prop_changed)
+        eg.addWidget(self._viscosity_slider)
+
+        self._expansion_slider = LSlider("Expansion", 3, 25, 10, "")
+        self._expansion_slider.valueChanged.connect(self._on_blob_prop_changed)
+        eg.addWidget(self._expansion_slider)
+
+        # Blob status readout
+        self._blob_status = QLabel("—")
+        self._blob_status.setWordWrap(True)
+        self._blob_status.setStyleSheet("color: #888; font-size: 10px;")
+        eg.addWidget(self._blob_status)
+
+        # Apply to all button
+        apply_all_btn = QPushButton("Apply Type to All Blobs")
+        apply_all_btn.clicked.connect(self._apply_wax_to_all)
+        eg.addWidget(apply_all_btn)
+
+        layout.addWidget(edit_group)
 
         # ══════════════════════════════════════════════════════════════════
         # RENDERING
@@ -378,7 +485,10 @@ class ControlPanel(QWidget):
         self._current_custom_base: Optional[tuple] = None
         self._current_contrast: Optional[tuple] = None
         self._contrast_mode = "none"
+        self._blob_color_mode = "uniform"
         self._update_swatches()
+        self._update_blob_swatches()
+        self._refresh_blob_selector()
 
     # ── colour slots ──────────────────────────────────────────────────────
 
@@ -389,6 +499,7 @@ class ControlPanel(QWidget):
             self.canvas.set_scheme(scheme)
             self._update_swatches()
             self._current_custom_base = None
+            self._apply_blob_colors()
         except KeyError as e:
             logger.error("Scheme error: %s", e)
 
@@ -487,11 +598,53 @@ class ControlPanel(QWidget):
         )
         self.canvas.set_scheme(scheme)
         self._update_swatches()
+        self._apply_blob_colors()
 
     # ── physics slots ─────────────────────────────────────────────────────
 
     def _on_blob_count(self, count: int) -> None:
         self.engine.reset(count)
+        self._apply_blob_colors()
+        self._refresh_blob_selector()
+
+    def _on_blob_color_mode(self, idx: int) -> None:
+        mode = self._blob_color_combo.currentData()
+        self._blob_color_mode = mode
+        self._apply_blob_colors()
+
+    def _apply_blob_colors(self) -> None:
+        """Assign per-blob colours based on current mode and scheme."""
+        mode = getattr(self, "_blob_color_mode", "uniform")
+        scheme = self.canvas.scheme
+        blobs = self.engine.blobs
+        colors = assign_blob_colors(len(blobs), scheme, mode)
+        for b, (base_c, hot_c) in zip(blobs, colors):
+            if mode == "uniform":
+                b.color = None       # use scheme default
+                b.hot_color = None
+            else:
+                b.color = base_c
+                b.hot_color = hot_c
+        self._update_blob_swatches()
+
+    def _update_blob_swatches(self) -> None:
+        """Show small colour dots for each blob's assigned colour."""
+        while self._blob_swatch_layout.count():
+            item = self._blob_swatch_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        scheme = self.canvas.scheme
+        for b in self.engine.blobs:
+            c = b.color or scheme.base
+            sw = QWidget()
+            sw.setFixedSize(14, 14)
+            sw.setStyleSheet(
+                f"background: rgb({c[0]},{c[1]},{c[2]}); "
+                "border-radius: 7px; border: 1px solid #555;"
+            )
+            self._blob_swatch_layout.addWidget(sw)
+        self._blob_swatch_layout.addStretch()
 
     def _on_cold_radius(self, pct: int) -> None:
         frac = pct / 100
@@ -503,6 +656,120 @@ class ControlPanel(QWidget):
         for b in self.engine.blobs:
             b.temperature = max(0, b.temperature - 0.4)
 
+    # ── blob editor slots ─────────────────────────────────────────────────
+
+    def _refresh_blob_selector(self) -> None:
+        """Rebuild the blob selector combo from current engine state."""
+        self._blob_select.blockSignals(True)
+        self._blob_select.clear()
+        for i, b in enumerate(self.engine.blobs):
+            wax_name = b.wax.name if b.wax else "Standard"
+            self._blob_select.addItem(f"{b.label} ({wax_name})", i)
+        self._blob_select.blockSignals(False)
+        if self._blob_select.count() > 0:
+            self._blob_select.setCurrentIndex(0)
+            self._on_blob_selected(0)
+
+    def _on_blob_selected(self, idx: int) -> None:
+        """Load the selected blob's wax properties into the sliders."""
+        if idx < 0 or idx >= len(self.engine.blobs):
+            return
+        b = self.engine.blobs[idx]
+        w = b.wax
+
+        # Block signals while updating sliders to avoid feedback
+        for sl in (self._density_slider, self._heat_sens_slider,
+                   self._viscosity_slider, self._expansion_slider):
+            sl.blockSignals(True)
+
+        self._density_slider.setValue(int(w.density * 10))
+        self._heat_sens_slider.setValue(int(w.heat_sensitivity * 10))
+        self._viscosity_slider.setValue(int(w.viscosity * 10))
+        self._expansion_slider.setValue(int(w.expansion * 10))
+
+        for sl in (self._density_slider, self._heat_sens_slider,
+                   self._viscosity_slider, self._expansion_slider):
+            sl.blockSignals(False)
+
+        # Match wax type combo to current type (if preset)
+        self._wax_type_combo.blockSignals(True)
+        matched = False
+        for ki, key in enumerate(WAX_TYPE_NAMES):
+            wt = WAX_TYPES[key]
+            if (abs(w.density - wt.density) < 0.01 and
+                abs(w.heat_sensitivity - wt.heat_sensitivity) < 0.01 and
+                abs(w.viscosity - wt.viscosity) < 0.01 and
+                abs(w.expansion - wt.expansion) < 0.01):
+                self._wax_type_combo.setCurrentIndex(ki)
+                matched = True
+                break
+        if not matched:
+            self._wax_type_combo.setCurrentIndex(0)
+        self._wax_type_combo.blockSignals(False)
+
+        self._update_blob_status(b)
+
+    def _on_wax_type_changed(self, idx: int) -> None:
+        """Apply a wax type preset to the selected blob."""
+        blob_idx = self._blob_select.currentIndex()
+        if blob_idx < 0 or blob_idx >= len(self.engine.blobs):
+            return
+        key = self._wax_type_combo.currentData()
+        if key and key in WAX_TYPES:
+            self.engine.set_blob_wax(blob_idx, key)
+            # Refresh sliders
+            self._on_blob_selected(blob_idx)
+            self._refresh_blob_selector_label(blob_idx)
+
+    def _on_blob_prop_changed(self, _val: int = 0) -> None:
+        """Apply fine-tuned custom wax properties to the selected blob."""
+        blob_idx = self._blob_select.currentIndex()
+        if blob_idx < 0 or blob_idx >= len(self.engine.blobs):
+            return
+        self.engine.set_blob_wax_custom(
+            blob_idx,
+            density=self._density_slider.value() / 10,
+            heat_sensitivity=self._heat_sens_slider.value() / 10,
+            viscosity=self._viscosity_slider.value() / 10,
+            expansion=self._expansion_slider.value() / 10,
+        )
+        self._refresh_blob_selector_label(blob_idx)
+        self._update_blob_status(self.engine.blobs[blob_idx])
+
+    def _refresh_blob_selector_label(self, idx: int) -> None:
+        """Update just one entry in the blob selector combo."""
+        if 0 <= idx < len(self.engine.blobs):
+            b = self.engine.blobs[idx]
+            wax_name = b.wax.name if b.wax else "Standard"
+            self._blob_select.setItemText(idx, f"{b.label} ({wax_name})")
+
+    def _update_blob_status(self, b) -> None:
+        """Show blob's live state."""
+        w = b.wax
+        self._blob_status.setText(
+            f"<b>{b.label}</b> — {w.name}<br>"
+            f"density={w.density:.1f}  heat={w.heat_sensitivity:.1f}  "
+            f"visc={w.viscosity:.1f}  expand={w.expansion:.1f}<br>"
+            f"temp={b.temperature:.2f}  radius={b.radius:.3f}  "
+            f"{'detached' if b.detached else 'grounded'}"
+        )
+
+    def _apply_wax_to_all(self) -> None:
+        """Apply the current editor's wax type to every blob."""
+        blob_idx = self._blob_select.currentIndex()
+        if blob_idx < 0 or blob_idx >= len(self.engine.blobs):
+            return
+        source_wax = self.engine.blobs[blob_idx].wax
+        for b in self.engine.blobs:
+            b.wax = WaxType(
+                name=source_wax.name,
+                density=source_wax.density,
+                heat_sensitivity=source_wax.heat_sensitivity,
+                viscosity=source_wax.viscosity,
+                expansion=source_wax.expansion,
+            )
+        self._refresh_blob_selector()
+
     # ── action slots ──────────────────────────────────────────────────────
 
     def _on_pause(self, checked: bool) -> None:
@@ -513,6 +780,8 @@ class ControlPanel(QWidget):
         count = self._count_slider.value()
         self.engine.reset(count)
         self._warmup_bar.setValue(0)
+        self._apply_blob_colors()
+        self._refresh_blob_selector()
 
     def _on_warmup(self, pct: int) -> None:
         self._warmup_bar.setValue(pct)

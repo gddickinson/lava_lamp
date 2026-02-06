@@ -71,6 +71,13 @@ def render_frame(
     weighted_temp = np.zeros((rh, rw), dtype=np.float64)
     total_weight = np.zeros((rh, rw), dtype=np.float64)
 
+    # Per-blob colour accumulators (weighted by field contribution)
+    weighted_base_rgb = np.zeros((rh, rw, 3), dtype=np.float64)
+    weighted_hot_rgb = np.zeros((rh, rw, 3), dtype=np.float64)
+
+    default_base = np.array(scheme.base, dtype=np.float64)
+    default_hot = np.array(scheme.hot, dtype=np.float64)
+
     blobs = engine.blobs
     for b in blobs:
         proj_x = b.x * 2.0
@@ -90,20 +97,33 @@ def render_frame(
         weighted_temp += b.temperature * contribution
         total_weight += contribution
 
+        # Accumulate this blob's colour weighted by contribution
+        b_base = np.array(b.color, dtype=np.float64) if b.color else default_base
+        b_hot = np.array(b.hot_color, dtype=np.float64) if b.hot_color else default_hot
+        cont3 = contribution[..., np.newaxis]  # (rh, rw, 1)
+        weighted_base_rgb += cont3 * b_base
+        weighted_hot_rgb += cont3 * b_hot
+
     threshold = 1.0
     is_wax = (field > threshold) & inside_lamp
 
     # Temperature per pixel
-    temp = np.where(total_weight > 0, weighted_temp / np.maximum(total_weight, 1e-10), 0.0)
+    tw_safe = np.maximum(total_weight, 1e-10)
+    temp = np.where(total_weight > 0, weighted_temp / tw_safe, 0.0)
+
+    # Per-pixel blended base and hot colours
+    tw3 = tw_safe[..., np.newaxis]
+    pixel_base = np.where(total_weight[..., np.newaxis] > 0,
+                          weighted_base_rgb / tw3, default_base)
+    pixel_hot = np.where(total_weight[..., np.newaxis] > 0,
+                         weighted_hot_rgb / tw3, default_hot)
 
     # ── Colour computation ────────────────────────────────────────────
     img = np.zeros((rh, rw, 4), dtype=np.uint8)
 
-    # Wax colour: interpolate base→hot based on temperature
-    base = np.array(scheme.base, dtype=np.float64)
-    hot = np.array(scheme.hot, dtype=np.float64)
+    # Wax colour: interpolate per-pixel base→hot based on temperature
     t3 = temp[..., np.newaxis]  # (rh, rw, 1)
-    wax_rgb = base + (hot - base) * t3
+    wax_rgb = pixel_base + (pixel_hot - pixel_base) * t3
 
     # Brighten at high field values (centre of blob)
     bright = np.clip((field - 1.0) * 0.5, 0, 1.0)[..., np.newaxis]
@@ -130,7 +150,7 @@ def render_frame(
     is_liquid = inside_lamp & ~is_wax
     liq = np.array(scheme.liquid, dtype=np.float64)
     glow = np.clip(field * 0.3, 0, 1.0)[..., np.newaxis]
-    liq_rgb = liq + glow * base * 0.3
+    liq_rgb = liq + glow * default_base * 0.3
     liq_rgb *= shade
     liq_rgb_u8 = np.clip(liq_rgb, 0, 255).astype(np.uint8)
     img[is_liquid, 0] = liq_rgb_u8[is_liquid, 0]
@@ -154,9 +174,9 @@ def render_frame(
             if gdist < 1.0:
                 ga = glow_alpha * (1.0 - gdist)
                 if img[py, px, 3] > 0:
-                    img[py, px, 0] = min(255, int(img[py, px, 0] + base[0] * ga))
-                    img[py, px, 1] = min(255, int(img[py, px, 1] + base[1] * ga))
-                    img[py, px, 2] = min(255, int(img[py, px, 2] + base[2] * ga))
+                    img[py, px, 0] = min(255, int(img[py, px, 0] + default_base[0] * ga))
+                    img[py, px, 1] = min(255, int(img[py, px, 1] + default_base[1] * ga))
+                    img[py, px, 2] = min(255, int(img[py, px, 2] + default_base[2] * ga))
 
     return img
 
