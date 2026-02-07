@@ -128,6 +128,11 @@ class PhysicsParams:
     # Speed
     flow_speed: float = 1.0
 
+    # Continuous perturbation
+    continuous_stir: float = 0.0    # 0–1: coherent swirling convection current
+    continuous_shake: float = 0.0   # 0–1: random turbulent lateral impulses
+    stir_speed: float = 1.0        # how fast the stir pattern rotates
+
 
 # ---------------------------------------------------------------------------
 # Engine
@@ -256,13 +261,83 @@ class LavaLampEngine:
                 net_vertical = gravity
 
             # ── Apply forces (per-blob drag) ──
-            b.vx += (-b_h_drag * b.vx) * dt
+            # Reduce horizontal drag when stir/shake is active — the
+            # convection current and turbulence carry blobs laterally,
+            # so high drag shouldn't kill that motion entirely.
+            stir_level = p.continuous_stir + p.continuous_shake
+            drag_reduction = 1.0 - min(0.6, stir_level * 0.4)
+            eff_h_drag = b_h_drag * drag_reduction
+
+            b.vx += (-eff_h_drag * b.vx) * dt
             b.vy += (net_vertical - b_v_drag * b.vy) * dt
-            b.vz += (-b_h_drag * b.vz) * dt
+            b.vz += (-eff_h_drag * b.vz) * dt
 
             drift = 0.06 if b.detached else 0.008
             b.vx += self.rng.uniform(-0.5, 0.5) * drift * dt
             b.vz += self.rng.uniform(-0.5, 0.5) * drift * dt
+
+            # ── Continuous stir: coherent convection current ──
+            # Creates a slowly rotating flow field inside the lamp.
+            # Blobs are pushed tangentially in a swirling pattern,
+            # with a vertical rolling component to create a toroidal
+            # convection cell.  Forces are impulses (not dt-scaled)
+            # so they compete meaningfully with drag.
+            if p.continuous_stir > 0.001:
+                stir = p.continuous_stir
+                t_stir = self.warmup_time * p.stir_speed
+
+                swirl_angle = t_stir * 0.4
+                hr = math.sqrt(b.x * b.x + b.z * b.z) + 0.001
+
+                # Tangent perpendicular to radial (gives circular flow)
+                tang_x = -b.z / hr
+                tang_z = b.x / hr
+
+                # Stronger near edges (convection current is faster there)
+                radial_frac = min(1.0, hr / p.wall_radius)
+                swirl_str = stir * 0.12 * (0.3 + 0.7 * radial_frac)
+
+                # Slowly rotate the current direction
+                cos_a = math.cos(swirl_angle)
+                sin_a = math.sin(swirl_angle)
+                flow_x = tang_x * cos_a - tang_z * sin_a
+                flow_z = tang_x * sin_a + tang_z * cos_a
+
+                # Impulse (not *dt) — competes with drag properly
+                b.vx += flow_x * swirl_str
+                b.vz += flow_z * swirl_str
+
+                # Vertical rolling: one side up, other side down
+                roll_phase = math.atan2(b.z, b.x) + swirl_angle * 0.3
+                b.vy += math.sin(roll_phase) * stir * 0.03 * radial_frac
+
+                # Surging: current waxes and wanes
+                surge = 0.7 + 0.3 * math.sin(t_stir * 1.1)
+                b.vx *= 1.0 + (surge - 1.0) * stir * 0.15
+                b.vz *= 1.0 + (surge - 1.0) * stir * 0.15
+
+                # Radial push outward — blobs sitting in the centre
+                # are nudged to the edges where the current is stronger
+                if hr < p.wall_radius * 0.3:
+                    outward = stir * 0.02
+                    b.vx += (b.x / hr) * outward
+                    b.vz += (b.z / hr) * outward
+
+            # ── Continuous shake: random turbulent impulses ──
+            # Unlike stir (coherent), shake adds random lateral kicks
+            # each frame — vibration / someone nudging the lamp.
+            if p.continuous_shake > 0.001:
+                shake = p.continuous_shake
+                # Per-frame impulses (not *dt)
+                shake_str = shake * 0.08
+                b.vx += self.rng.uniform(-1.0, 1.0) * shake_str
+                b.vz += self.rng.uniform(-1.0, 1.0) * shake_str
+                b.vy += self.rng.uniform(-0.3, 0.3) * shake_str * 0.25
+
+                # Occasional larger kicks (simulating bumps)
+                if self.rng.uniform(0, 1) < 0.03 * shake:
+                    b.vx += self.rng.uniform(-1.0, 1.0) * shake * 0.2
+                    b.vz += self.rng.uniform(-1.0, 1.0) * shake * 0.2
 
             # ── Update position ──
             b.x += b.vx * dt

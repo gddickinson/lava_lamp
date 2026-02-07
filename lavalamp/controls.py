@@ -397,7 +397,9 @@ class ControlPanel(QWidget):
         # MIXING
         # ══════════════════════════════════════════════════════════════════
         mix_group = QGroupBox("Mixing")
-        mg = QGridLayout(mix_group)
+        mix_vbox = QVBoxLayout(mix_group)
+
+        mg = QGridLayout()
 
         stir_btn = QPushButton("🌀  Stir")
         stir_btn.clicked.connect(lambda: self.engine.stir(0.3))
@@ -414,6 +416,29 @@ class ControlPanel(QWidget):
         cool_btn = QPushButton("❄  Cool Down")
         cool_btn.clicked.connect(self._cool_down)
         mg.addWidget(cool_btn, 1, 1)
+
+        mix_vbox.addLayout(mg)
+
+        # ── Continuous perturbation ───────────────────────────────────────
+        mix_vbox.addWidget(QLabel("─ Continuous ─"))
+
+        self._cont_stir_slider = LSlider("Stir Current", 0, 100, 0, "%")
+        self._cont_stir_slider.valueChanged.connect(
+            lambda v: setattr(self.engine.params, "continuous_stir", v / 100)
+        )
+        mix_vbox.addWidget(self._cont_stir_slider)
+
+        self._stir_speed_slider = LSlider("Stir Speed", 10, 300, 100, "%")
+        self._stir_speed_slider.valueChanged.connect(
+            lambda v: setattr(self.engine.params, "stir_speed", v / 100)
+        )
+        mix_vbox.addWidget(self._stir_speed_slider)
+
+        self._cont_shake_slider = LSlider("Turbulence", 0, 100, 0, "%")
+        self._cont_shake_slider.valueChanged.connect(
+            lambda v: setattr(self.engine.params, "continuous_shake", v / 100)
+        )
+        mix_vbox.addWidget(self._cont_shake_slider)
 
         layout.addWidget(mix_group)
 
