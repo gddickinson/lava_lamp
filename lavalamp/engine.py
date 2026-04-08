@@ -35,6 +35,15 @@ class WaxType:
     viscosity: float = 1.0       # >1 more sluggish, <1 zippier
     expansion: float = 1.0      # >1 expands more when hot, <1 stays compact
 
+    def __post_init__(self):
+        """Validate that no multiplier is negative."""
+        for field_name in ("density", "heat_sensitivity", "viscosity", "expansion"):
+            value = getattr(self, field_name)
+            if value < 0:
+                raise ValueError(
+                    f"WaxType.{field_name} must be non-negative, got {value}"
+                )
+
 
 # Built-in wax types
 WAX_TYPES: Dict[str, WaxType] = {

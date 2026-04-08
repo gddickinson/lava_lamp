@@ -99,22 +99,26 @@ class LavaCanvas(QWidget):
         if not self._paused:
             self.engine.step(dt)
 
-        # Render
-        img = render_frame(
-            self.engine, self.scheme,
-            self.LAMP_W, self.LAMP_H,
-            self.render_scale,
-        )
+        # Render (with error handling for display/rendering failures)
+        try:
+            img = render_frame(
+                self.engine, self.scheme,
+                self.LAMP_W, self.LAMP_H,
+                self.render_scale,
+            )
 
-        # Convert to QPixmap
-        h, w, ch = img.shape
-        bytes_per_line = ch * w
-        qimg = QImage(img.data, w, h, bytes_per_line, QImage.Format_RGBA8888).copy()
-        self._pixmap = QPixmap.fromImage(qimg).scaled(
-            self.LAMP_W, self.LAMP_H,
-            Qt.IgnoreAspectRatio,
-            Qt.SmoothTransformation,
-        )
+            # Convert to QPixmap
+            h, w, ch = img.shape
+            bytes_per_line = ch * w
+            qimg = QImage(img.data, w, h, bytes_per_line, QImage.Format_RGBA8888).copy()
+            self._pixmap = QPixmap.fromImage(qimg).scaled(
+                self.LAMP_W, self.LAMP_H,
+                Qt.IgnoreAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        except Exception:
+            logger.exception("Rendering failed, skipping frame")
+
         self.update()
 
         # FPS tracking

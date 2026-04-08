@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "lavalamp"
+version = "1.0.0"
+description = "Physics-based lava lamp simulator with metaball rendering"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.21.0",
+    "PyQt5>=5.15.0",
+]
+
+[project.scripts]
+lavalamp = "lavalamp.app:main"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
