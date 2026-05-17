@@ -110,3 +110,7 @@ lavalamp_app/
     ├── controls.py           # Full control panel
     └── main_window.py        # Main window assembly
 ```
+
+
+---
+*Built with AI assistance from [Claude (Anthropic)](https://claude.com/).*
